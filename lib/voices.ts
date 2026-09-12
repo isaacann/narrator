@@ -39,7 +39,7 @@ export const SPEED_OPTIONS = [0.75, 1, 1.25, 1.5] as const;
 // Derived so the API's clamp bounds can never drift from the options above.
 export const SPEED_MIN = SPEED_OPTIONS[0];
 export const SPEED_MAX = SPEED_OPTIONS[SPEED_OPTIONS.length - 1];
-export const SPEED_DEFAULT = 1;
+export const SPEED_DEFAULT = 1.25;
 
 /** Count "words" for mixed English + 中文 text: latin word runs + CJK characters. */
 export function countWords(text: string): number {

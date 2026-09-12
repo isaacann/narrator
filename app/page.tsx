@@ -2,6 +2,8 @@
 
 import {
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -16,7 +18,9 @@ import {
 import AudioPlayer from "@/components/AudioPlayer";
 import BrowserSpeechPanel, {
   type BrowserSpeechHandle,
+  type ReadAlongState,
 } from "@/components/BrowserSpeechPanel";
+import { splitSentences } from "@/lib/sentences";
 import Toast, { type ToastData } from "@/components/Toast";
 import VoiceSelector from "@/components/VoiceSelector";
 import {
@@ -49,11 +53,19 @@ export default function Home() {
   const [speed, setSpeed] = useState(SPEED_DEFAULT);
   const [loading, setLoading] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [readAlong, setReadAlong] = useState<ReadAlongState>({
+    active: null,
+    speaking: false,
+  });
+  // True while an IME is mid-composition. Uncommitted candidates live only
+  // inside the textarea, so the mirror would render blind without this.
+  const [composing, setComposing] = useState(false);
   const [autoPlaySignal, setAutoPlaySignal] = useState(0);
   const [toast, setToast] = useState<ToastData | null>(null);
 
   const speechPanelRef = useRef<BrowserSpeechHandle>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
   const audioUrlRef = useRef<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -142,6 +154,52 @@ export default function Home() {
   }, []);
 
   const trimmed = text.trim();
+  // Split once per edit; the same ranges drive both what is spoken and what
+  // is highlighted, so they cannot disagree about sentence positions.
+  const sentences = useMemo(() => splitSentences(text), [text]);
+  const activeSentence =
+    readAlong.speaking &&
+    readAlong.active !== null &&
+    readAlong.active < sentences.length
+      ? readAlong.active
+      : null;
+  // The mirror only replaces the visible text while speech is running, so the
+  // editing experience is never affected by a metrics mismatch. It also stands
+  // down during IME composition, whose uncommitted candidates exist only
+  // inside the textarea and would otherwise be typed blind.
+  const showMirror = readAlong.speaking && text.length > 0 && !composing;
+
+  // Pick up wherever the textarea is already scrolled to when the mirror
+  // appears. Keyed on showMirror rather than done in a ref callback, which
+  // would re-run on every highlight change.
+  useLayoutEffect(() => {
+    if (!showMirror) return;
+    const mirror = mirrorRef.current;
+    const textarea = textareaRef.current;
+    if (mirror && textarea) mirror.scrollTop = textarea.scrollTop;
+  }, [showMirror]);
+
+  // Follow the spoken sentence. Without this the highlight runs off the bottom
+  // of a long text and the feature looks broken. The mirror's nth child is the
+  // nth sentence, so its offsetTop is already in scroll coordinates.
+  useLayoutEffect(() => {
+    if (!showMirror || activeSentence === null) return;
+    const mirror = mirrorRef.current;
+    const textarea = textareaRef.current;
+    const span = mirror?.children[activeSentence] as HTMLElement | undefined;
+    if (!mirror || !textarea || !span) return;
+
+    const top = span.offsetTop;
+    const bottom = top + span.offsetHeight;
+    const viewTop = textarea.scrollTop;
+    const viewBottom = viewTop + textarea.clientHeight;
+    if (top < viewTop + 8 || bottom > viewBottom - 8) {
+      // Instant, not smooth — the highlight advances every few seconds and a
+      // smooth scroll would still be animating when the next one arrives.
+      textarea.scrollTop = Math.max(0, top - textarea.clientHeight / 3);
+    }
+  }, [activeSentence, showMirror]);
+
   const apiProvider =
     engine && engine.provider !== "browser" ? engine.provider : null;
   const maxChars =
@@ -266,16 +324,67 @@ export default function Home() {
 
       <section className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-xl shadow-stone-900/5 sm:p-7">
         <div className="rounded-2xl border border-stone-200 bg-stone-50 transition focus-within:border-amber-600/50 focus-within:ring-2 focus-within:ring-amber-600/15">
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder=""
-            spellCheck={false}
-            aria-label="Text to convert to speech"
-            className="block min-h-[20rem] w-full resize-none overflow-y-auto bg-transparent px-4 py-3.5 text-[15px] leading-relaxed text-stone-800 placeholder:text-stone-400 focus:outline-none"
-          />
+          {/*
+            The mirror is scoped to this inner box rather than the whole card,
+            so `inset-0` matches the textarea exactly — the footer row below
+            would otherwise add ~17px and knock the two out of step at the
+            bottom of a long scroll.
+          */}
+          <div className="relative">
+            {/*
+              Read-along mirror. While speech runs, this absolutely-positioned
+              layer paints the text and the textarea's own text goes
+              transparent, so the highlight can move behind the words.
+              Typography and box metrics must match the textarea exactly or the
+              two drift apart. It is only mounted while speaking, so editing is
+              never affected by any mismatch.
+            */}
+            {showMirror && (
+              <div
+                ref={mirrorRef}
+                aria-hidden
+                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-3.5 text-[15px] leading-relaxed text-stone-800 [scrollbar-gutter:stable]"
+              >
+                {sentences.length === 0 ? (
+                  text
+                ) : (
+                  sentences.map((range, index) => (
+                    <span
+                      key={range.start}
+                      className={
+                        index === activeSentence
+                          ? "rounded-sm bg-amber-300/60 box-decoration-clone transition-colors duration-150"
+                          : undefined
+                      }
+                    >
+                      {text.slice(range.start, range.end)}
+                    </span>
+                  ))
+                )}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={onKeyDown}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              onScroll={(e) => {
+                // The textarea scrolls internally past its height cap; keep the
+                // mirror's viewport locked to it.
+                if (mirrorRef.current) {
+                  mirrorRef.current.scrollTop = e.currentTarget.scrollTop;
+                }
+              }}
+              placeholder=""
+              spellCheck={false}
+              aria-label="Text to convert to speech"
+              className={`relative z-10 block min-h-[20rem] w-full resize-none overflow-y-auto bg-transparent px-4 py-3.5 text-[15px] leading-relaxed caret-stone-800 selection:bg-amber-600/15 [scrollbar-gutter:stable] placeholder:text-stone-400 focus:outline-none ${
+                showMirror ? "text-transparent" : "text-stone-800"
+              }`}
+            />
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-200 px-3 py-2">
             <div className="flex items-center gap-1">
               {/* <button
@@ -381,10 +490,12 @@ export default function Home() {
           <div className="mt-6">
             <BrowserSpeechPanel
               ref={speechPanelRef}
-              text={trimmed}
+              text={text}
+              sentences={sentences}
               voice={systemVoice}
               rate={speed}
               onNotify={showToast}
+              onReadAlong={setReadAlong}
             />
           </div>
         )}
