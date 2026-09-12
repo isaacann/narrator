@@ -306,7 +306,7 @@ export default function Home() {
   };
 
   return (
-    <main className="mx-auto flex min-h-svh w-full max-w-5xl flex-col px-4 py-10 sm:py-14">
+    <main className="mx-auto flex min-h-svh w-full max-w-[82rem] flex-col px-4 py-10 sm:py-14">
       {apiProvider && (
         <header className="mb-8 flex flex-wrap items-center justify-end gap-3">
           <div
@@ -322,6 +322,13 @@ export default function Home() {
       )}
 
 
+      {/*
+        Two columns from `lg` up: the passage on the left, controls pinned to
+        the right. With a long passage the page scrolls, and a sticky side card
+        keeps voice, speed and transport reachable without scrolling back up.
+        Below `lg` it collapses to one column with the controls underneath.
+      */}
+      <div className="grid flex-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <section className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-xl shadow-stone-900/5 sm:p-7">
         <div className="rounded-2xl border border-stone-200 bg-stone-50 transition focus-within:border-amber-600/50 focus-within:ring-2 focus-within:ring-amber-600/15">
           {/*
@@ -417,17 +424,31 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-5 sm:grid-cols-2">
+        {/* The generated player stays with the passage it belongs to. */}
+        {audioUrl && engine?.provider !== "browser" && (
+          <div className="mt-6">
+            <AudioPlayer
+              src={audioUrl}
+              autoPlaySignal={autoPlaySignal}
+              voiceName={voiceName}
+            />
+          </div>
+        )}
+      </section>
+
+      <aside className="flex flex-col gap-4 lg:sticky lg:top-8">
+        <div className="rounded-3xl border border-stone-200/80 bg-white p-5 shadow-xl shadow-stone-900/5">
           <VoiceSelector
             voices={voices}
             value={voice}
             onChange={selectVoice}
             disabled={!engine || loading}
           />
+
           <div
             role="radiogroup"
             aria-label="Speech rate"
-            className="grid min-w-0 grid-cols-4 gap-1.5"
+            className="mt-5 grid min-w-0 grid-cols-4 gap-1.5"
           >
             {SPEED_OPTIONS.map((option) => {
               const active = speed === option;
@@ -450,57 +471,44 @@ export default function Home() {
               );
             })}
           </div>
+
+          {/* Browser mode speaks through the transport card below instead. */}
+          {apiProvider && (
+            <button
+              type="button"
+              onClick={() => void generate()}
+              disabled={loading || !trimmed}
+              aria-busy={loading}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-stone-900 px-4 py-3.5 text-sm font-semibold text-white shadow-md transition hover:bg-stone-700 hover:shadow-lg active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-stone-900"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" aria-hidden />
+                  Generate Audio
+                </>
+              )}
+            </button>
+          )}
         </div>
 
-        {/* Browser mode speaks through the transport row below instead. */}
-        {apiProvider && (
-          <button
-            type="button"
-            onClick={() => void generate()}
-            disabled={loading || !trimmed}
-            aria-busy={loading}
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-stone-900 px-4 py-3.5 text-sm font-semibold text-white shadow-md transition hover:bg-stone-700 hover:shadow-lg active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-stone-900"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                Generating…
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-4 w-4" aria-hidden />
-                Generate Audio
-              </>
-            )}
-          </button>
-        )}
-
-
-        {audioUrl && engine?.provider !== "browser" && (
-          <div className="mt-6">
-            <AudioPlayer
-              src={audioUrl}
-              autoPlaySignal={autoPlaySignal}
-              voiceName={voiceName}
-            />
-          </div>
-        )}
-
         {engine?.provider === "browser" && (
-          <div className="mt-6">
-            <BrowserSpeechPanel
-              ref={speechPanelRef}
-              text={text}
-              sentences={sentences}
-              voice={systemVoice}
-              rate={speed}
-              onNotify={showToast}
-              onReadAlong={setReadAlong}
-            />
-          </div>
+          <BrowserSpeechPanel
+            ref={speechPanelRef}
+            text={text}
+            sentences={sentences}
+            voice={systemVoice}
+            rate={speed}
+            onNotify={showToast}
+            onReadAlong={setReadAlong}
+          />
         )}
-      </section>
-
+      </aside>
+      </div>
 
       {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </main>
