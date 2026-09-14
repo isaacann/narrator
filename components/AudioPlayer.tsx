@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Download, Pause, Play, RotateCcw } from "lucide-react";
+import { Download, FastForward, Pause, Play, Rewind, RotateCcw } from "lucide-react";
+
+/** Seconds moved by the back/forward skip buttons. */
+const SKIP_SECONDS = 5;
 
 type Props = {
   src: string;
@@ -82,6 +85,18 @@ export default function AudioPlayer({
     if (!audio) return;
     audio.currentTime = 0;
     audio.play().catch(() => {});
+  }, []);
+
+  // Nudge the playhead by whole seconds, clamped to the clip's bounds. Read
+  // the duration off the element rather than state: `duration` is still 0
+  // before metadata lands, and Chrome's Infinity case must stay unclamped.
+  const skip = useCallback((delta: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const end = Number.isFinite(audio.duration) ? audio.duration : Infinity;
+    const next = Math.min(Math.max(audio.currentTime + delta, 0), end);
+    audio.currentTime = next;
+    setCurrent(next);
   }, []);
 
   const seek = (value: number) => {
@@ -179,6 +194,43 @@ export default function AudioPlayer({
             <Download className="h-4 w-4" aria-hidden />
           </a>
         </div>
+      </div>
+
+      {/*
+        Skip row. The step is a flat 5s of audio however the clip was
+        generated: the provider already baked the chosen rate into the file, so
+        a second of it is a second at any speed — the same behaviour as a
+        podcast player's skip buttons. Reading the rate off the speed control
+        would be wrong, since changing it does not re-render the clip. Two
+        equal halves keep both targets thumb-sized when the layout is narrow.
+      */}
+      <div className="mt-4 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => skip(-SKIP_SECONDS)}
+          disabled={!ready}
+          aria-label={`Back ${SKIP_SECONDS} seconds`}
+          title={`Back ${SKIP_SECONDS}s`}
+          className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-white text-stone-600 shadow-sm transition hover:border-stone-300 hover:text-stone-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Rewind className="h-4 w-4" aria-hidden />
+          <span className="text-xs font-medium tabular-nums">
+            {SKIP_SECONDS}s
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => skip(SKIP_SECONDS)}
+          disabled={!ready}
+          aria-label={`Forward ${SKIP_SECONDS} seconds`}
+          title={`Forward ${SKIP_SECONDS}s`}
+          className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-white text-stone-600 shadow-sm transition hover:border-stone-300 hover:text-stone-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <FastForward className="h-4 w-4" aria-hidden />
+          <span className="text-xs font-medium tabular-nums">
+            {SKIP_SECONDS}s
+          </span>
+        </button>
       </div>
 
       <audio

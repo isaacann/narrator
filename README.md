@@ -1,93 +1,79 @@
 # Vox — Text to Audio
 
-Convert English & 中文 (Mandarin) text into natural, human-like speech from a clean, minimalist web UI.
+Convert English & 中文 (Mandarin) text into speech from a clean, minimalist web UI.
 
 Built with **Next.js (App Router) · React 19 · Tailwind CSS 4 · lucide-react**.
 
-## How the audio engine is picked
+## How it speaks
 
-| Priority | Engine | Model | Requires |
-| --- | --- | --- | --- |
-| 1 | ElevenLabs | `eleven_multilingual_v2` | `ELEVENLABS_API_KEY` |
-| 2 | OpenAI | `tts-1-hd` | `OPENAI_API_KEY` |
-| 3 | Browser (zero-config) | Web Speech API | nothing |
+The app reads text aloud with the **browser's own speech engine** (the Web Speech API) — no API key, no account, no server round trip. Voices come from your operating system, so the list you see depends on what is installed locally.
 
-The app auto-detects the engine from `.env.local` on load (ElevenLabs wins when both keys exist — it renders mixed English + Mandarin most naturally). `TTS_PROVIDER=elevenlabs|openai` can pin one explicitly. With no keys at all, the app falls back to the browser's built-in `speechSynthesis` and says so via an inline notice — it stays fully usable, minus the mp3 download.
+The hosted ElevenLabs / OpenAI path is **switched off**, and the UI no longer offers it. Its code is still in the repo, unreferenced, in case you want it back — see [Dormant: hosted engines](#dormant-hosted-engines).
 
 ## Setup
 
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Configure providers (optional — browser mode works without it)
-cp .env.example .env.local
-#    then edit .env.local and paste at least one API key:
-#      ELEVENLABS_API_KEY=…   (https://elevenlabs.io → Profile → API Keys)
-#      OPENAI_API_KEY=…       (https://platform.openai.com/api-keys)
-
-# 3. Run the dev server
 npm run dev
 ```
 
-Open **http://localhost:3000**.
+Open **http://localhost:6001**. No `.env.local` is needed — with no keys configured the app would have used browser mode anyway.
 
-## Testing it locally
+## Using it
 
 1. **Type or paste text** — mix languages freely, e.g.
    `Welcome back! 今天我们要聊一聊 text-to-speech 的发展。`
-   - Watch the char/word counter (words = latin words + CJK characters) and per-engine char limit.
-2. **Pick a voice** (Alloy, Echo, Fable, Onyx, Nova, Shimmer on OpenAI; Rachel, Adam, Antoni, Bella on ElevenLabs; system voices in browser mode) and a **speed** — fixed 0.75× / 1.0× / 1.25× / 1.5×, not a free slider.
-3. Hit **Generate Audio** (or `Ctrl+Enter`).
-   - API mode: the button shows a spinner, then an audio player appears (play/pause, seekable scrubber with times, replay, download `.mp3`) and auto-plays.
-   - Browser mode: the same button reads the text aloud with transport controls (speak / pause / resume / stop).
-4. **Error paths to try:** generating with empty input, pasting a text over the engine's char limit (4,096 OpenAI / 10,000 ElevenLabs), or removing your API key and restarting (the app notifies you and switches to browser mode).
+2. **Pick a voice** from your system voices, and a **speed** — fixed 0.75× / 1.0× / 1.25× / 1.5×, not a free slider.
+3. Hit **Play** in the transport card (or `Ctrl+Enter`) to start reading.
+   - **Play / Pause** toggles. From a stopped state it starts the passage from the top.
+   - **Stop** clears the queue and the read-along highlight.
+   - **Back 5s / Forward 5s** move the position and keep reading. See below.
+4. While speech runs, the sentence being spoken is highlighted in the textarea and scrolled into view.
 
-### Verifying the API from a terminal
+### How the 5-second skips work
 
-```bash
-# Which engine is live?
-curl http://localhost:3000/api/tts
-# → {"provider":"openai","model":"tts-1-hd"}   (or "elevenlabs", or null)
+The Web Speech API exposes **no timeline**: no duration, no current position, and no way to seek inside an utterance. A skip can therefore only land on a **sentence boundary** — the whole queue is rebuilt from the target sentence. The two directions are measured differently:
 
-# Synthesize to a file (JSON in, mp3 stream out)
-curl -X POST http://localhost:3000/api/tts \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Hello 你好，world 世界!","voice":"nova","speed":1.0}' \
-  -o speech.mp3
-```
+- **Back 5s** uses the real start timestamps of sentences already heard, landing on the sentence that began closest to 5 seconds ago. Pausing shifts the recorded timeline forward so a long pause doesn't inflate the jump. This is exact.
+- **Forward 5s** has nothing to measure, so it sums a rate-based estimate of the rest of the current sentence plus the ones after it. At ~180 words-or-CJK-chars per minute this is a coarse approximation of the engine's real pacing.
+
+A sentence longer than the whole skip can't be split, so a jump may overshoot rather than landing mid-sentence — a 5s skip across 10-second sentences will move you further than 5s, because the nearest reachable boundaries are a full sentence apart. There is **no download button**: browser speech plays straight to the sound card and cannot be captured to a file by any browser API, so there is no audio to save.
 
 ## Project layout
 
 ```
 app/
-  api/tts/route.ts     # GET engine info · POST → provider call → streamed audio
+  api/tts/route.ts     # DORMANT — hosted provider route, unreferenced by the UI
   layout.tsx           # metadata + font stack (incl. CJK fallbacks)
-  page.tsx             # main UI: textarea, voice/speed, toasts
-  globals.css          # Tailwind v4 theme, slider/scrubber, animations
+  page.tsx             # main UI: textarea, voice/speed, read-along, toasts
+  globals.css          # Tailwind v4 theme, slider, animations
 components/
-  AudioPlayer.tsx      # play/pause, seek, replay, download, eq bars
+  BrowserSpeechPanel.tsx  # speechSynthesis transport: play/pause, stop, ±5s
+  AudioPlayer.tsx      # DORMANT — mp3 player for the hosted path
   VoiceSelector.tsx    # voice dropdown + description line
-  BrowserSpeechPanel.tsx  # zero-config speechSynthesis transport
   Toast.tsx            # error / info notifications
 lib/
-  voices.ts            # voice catalogs, provider metadata, word counter
+  voices.ts            # speed options, word counter
+  sentences.ts         # sentence splitting for speech + highlighting
 ```
 
-## Notes
+## Dormant: hosted engines
 
-- **Bilingual safety:** text travels as UTF-8 JSON and is passed to the engine untouched; `eleven_multilingual_v2` auto-detects per-run language, and OpenAI's voices handle inline CJK. No text preprocessing that could drop non-Latin characters.
-- **Streaming:** the API route pipes the provider's binary response straight through (`upstream.body → new Response(body)`), so audio starts arriving while the provider is still generating.
+`app/api/tts/route.ts` still works and still reads `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `TTS_PROVIDER` from `.env.local` (see `.env.example`), but nothing in the UI calls it. Its properties, for reference if you revive it:
+
+- **Streaming:** the route pipes the provider's binary response straight through (`upstream.body → new Response(body)`), so audio starts arriving while the provider is still generating.
 - **Keys stay server-side:** the browser only ever talks to `/api/tts`.
-- **Character limits:** OpenAI `tts-1-hd` = 4,096 chars/request; ElevenLabs multilingual v2 = 10,000; the UI counter enforces the active limit.
-- ElevenLabs' `speed` setting only accepts 0.7–1.2; the route clamps the 0.75–1.5 range into it.
+- **Character limits:** OpenAI `tts-1-hd` = 4,096 chars/request; ElevenLabs multilingual v2 = 10,000.
+- **Speed:** ElevenLabs' `speed` setting only accepts 0.7–1.2; the route clamps the 0.75–1.5 range into it.
+- **Bilingual:** text travels as UTF-8 JSON untouched; `eleven_multilingual_v2` auto-detects per-run language.
+
+Reviving it means restoring the provider probe and the `AudioPlayer` mount in `app/page.tsx` (see git history), not just adding a key.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| Header chip shows "Browser speech engine" | No API key found — add one to `.env.local` and **restart** `npm run dev` |
-| `401` toast from the provider | Key is invalid/expired — re-check `.env.local` |
-| `429` toast | Rate limit / quota exhausted on the provider account |
-| No sound in browser mode | Some Linux browsers ship no system voices; pick a different voice or install `speech-dispatcher` |
-| Clipboard button fails | Browsers only grant clipboard read on `localhost`/HTTPS and after permission — paste with `Ctrl+V` instead |
+| No voices in the dropdown | The system has none installed. On Linux install `speech-dispatcher`; Chrome and Edge ship network voices on most platforms |
+| No sound, but the highlight advances | The selected voice produced silence — try another voice |
+| Pause does nothing | Some engines/deprecated voices ignore `pause()`; the app notifies you |
+| Skipping lands in the wrong place | Expected within a sentence — Web Speech cannot seek mid-utterance, so skips snap to sentence boundaries |

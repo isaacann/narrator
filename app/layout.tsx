@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "narrator",
   description:
-    "Turn text into natural, human-like speech with ElevenLabs, OpenAI, or your browser's built-in voice engine.",
+    "Turn text into natural, human-like speech with your browser's built-in voice engine — no API key needed.",
 };
 
 export default function RootLayout({

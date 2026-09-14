@@ -8,14 +8,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import {
-  ClipboardPaste,
-  Info,
-  Loader2,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
-import AudioPlayer from "@/components/AudioPlayer";
+import { ClipboardPaste, Info, Trash2 } from "lucide-react";
 import BrowserSpeechPanel, {
   type BrowserSpeechHandle,
   type ReadAlongState,
@@ -23,36 +16,17 @@ import BrowserSpeechPanel, {
 import { splitSentences } from "@/lib/sentences";
 import Toast, { type ToastData } from "@/components/Toast";
 import VoiceSelector from "@/components/VoiceSelector";
-import {
-  countWords,
-  ELEVENLABS_VOICES,
-  OPENAI_VOICES,
-  PROVIDER_META,
-  SPEED_DEFAULT,
-  SPEED_OPTIONS,
-  type Voice,
-} from "@/lib/voices";
-
-type Engine = { provider: "elevenlabs" | "openai" | "browser" };
-
-// Only the hosted engines get a badge; the browser fallback stays unlabelled.
-const ENGINE_LABEL: Record<"elevenlabs" | "openai", string> = {
-  elevenlabs: "ElevenLabs · multilingual v2",
-  openai: "OpenAI · tts-1-hd",
-};
+import { SPEED_DEFAULT, SPEED_OPTIONS, type Voice } from "@/lib/voices";
 
 // Chrome ships this voice on desktop; prefer it as the browser-mode default.
 const PREFERRED_BROWSER_VOICE = "Google UK English Male";
 
 export default function Home() {
-  const [engine, setEngine] = useState<Engine | null>(null); // null while detecting
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voice, setVoice] = useState("");
   const [systemVoice, setSystemVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [text, setText] = useState("");
   const [speed, setSpeed] = useState(SPEED_DEFAULT);
-  const [loading, setLoading] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [readAlong, setReadAlong] = useState<ReadAlongState>({
     active: null,
     speaking: false,
@@ -60,13 +34,11 @@ export default function Home() {
   // True while an IME is mid-composition. Uncommitted candidates live only
   // inside the textarea, so the mirror would render blind without this.
   const [composing, setComposing] = useState(false);
-  const [autoPlaySignal, setAutoPlaySignal] = useState(0);
   const [toast, setToast] = useState<ToastData | null>(null);
 
   const speechPanelRef = useRef<BrowserSpeechHandle>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
-  const audioUrlRef = useRef<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (next: ToastData) => {
@@ -75,32 +47,8 @@ export default function Home() {
     toastTimer.current = setTimeout(() => setToast(null), 4500);
   };
 
-  // Which engine is live? The API route answers from the server's env keys.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/tts")
-      .then((res) => res.json())
-      .then((data: { provider: "elevenlabs" | "openai" | null }) => {
-        if (cancelled) return;
-        if (data.provider) {
-          setEngine({ provider: data.provider });
-          const list =
-            data.provider === "openai" ? OPENAI_VOICES : ELEVENLABS_VOICES;
-          setVoices(list);
-          setVoice(list[0].id);
-        } else {
-          setEngine({ provider: "browser" });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setEngine({ provider: "browser" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Browser mode: enumerate system voices (loads async on most browsers).
+  // Enumerate system voices (loads async on most browsers). This is the app's
+  // only engine — the hosted providers need API keys and are switched off.
   useEffect(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     const synth = window.speechSynthesis;
@@ -146,14 +94,6 @@ export default function Home() {
     el.style.height = `${Math.min(el.scrollHeight, 1152)}px`;
   }, [text]);
 
-  // Release the last generated blob when the page unloads.
-  useEffect(() => {
-    return () => {
-      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    };
-  }, []);
-
-  const trimmed = text.trim();
   // Split once per edit; the same ranges drive both what is spoken and what
   // is highlighted, so they cannot disagree about sentence positions.
   const sentences = useMemo(() => splitSentences(text), [text]);
@@ -200,128 +140,28 @@ export default function Home() {
     }
   }, [activeSentence, showMirror]);
 
-  const apiProvider =
-    engine && engine.provider !== "browser" ? engine.provider : null;
-  const maxChars =
-    engine && engine.provider !== "browser"
-      ? PROVIDER_META[engine.provider].maxChars
-      : null;
-  const overLimit = maxChars !== null && trimmed.length > maxChars;
-  const voiceName = voices.find((v) => v.id === voice)?.name ?? "speech";
+  const voiceCount = voices.length;
 
   const selectVoice = (id: string) => {
     setVoice(id);
-    if (engine?.provider === "browser") {
-      setSystemVoice(
-        window.speechSynthesis
-          ?.getVoices()
-          .find((v) => v.voiceURI === id) ?? null,
-      );
-    }
+    setSystemVoice(
+      window.speechSynthesis?.getVoices().find((v) => v.voiceURI === id) ?? null,
+    );
   };
 
-  const generate = async () => {
-    if (!engine) return;
-
-    if (engine.provider === "browser") {
-      speechPanelRef.current?.speak();
-      return;
-    }
-
-    if (!trimmed) {
-      showToast({ type: "info", message: "Type or paste some text first." });
-      textareaRef.current?.focus();
-      return;
-    }
-    if (overLimit) {
-      showToast({
-        type: "error",
-        message: `Text is over the ${maxChars?.toLocaleString()} character limit for this engine (${trimmed.length.toLocaleString()} so far). Trim it and try again.`,
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: trimmed, voice, speed }),
-      });
-      if (!res.ok) {
-        let message = `Generation failed (HTTP ${res.status}).`;
-        try {
-          const data: { error?: string } = await res.json();
-          if (typeof data?.error === "string") message = data.error;
-        } catch {
-          // keep the default message
-        }
-        showToast({ type: "error", message });
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = url;
-      setAudioUrl(url);
-      setAutoPlaySignal((n) => n + 1);
-    } catch {
-      showToast({
-        type: "error",
-        message: "Network error — could not reach the TTS service.",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const pasteFromClipboard = async () => {
-    try {
-      const clip = await navigator.clipboard.readText();
-      if (!clip) {
-        showToast({ type: "info", message: "The clipboard is empty." });
-        return;
-      }
-      setText(clip);
-      textareaRef.current?.focus();
-    } catch {
-      showToast({
-        type: "error",
-        message:
-          "Clipboard access was denied by your browser. Paste manually with Ctrl+V.",
-      });
-    }
-  };
-
-  const clearText = () => {
-    setText("");
-    textareaRef.current?.focus();
+  const speak = () => {
+    speechPanelRef.current?.speak();
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      void generate();
+      speak();
     }
   };
 
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-[82rem] flex-col px-4 py-10 sm:py-14">
-      {apiProvider && (
-        <header className="mb-8 flex flex-wrap items-center justify-end gap-3">
-          <div
-            className="flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1.5 shadow-sm"
-            title="Active speech engine"
-          >
-            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-            <span className="whitespace-nowrap text-xs font-medium text-stone-600">
-              {ENGINE_LABEL[apiProvider]}
-            </span>
-          </div>
-        </header>
-      )}
-
-
       {/*
         Two columns from `lg` up: the passage on the left, controls pinned to
         the right. With a long passage the page scrolls, and a sticky side card
@@ -424,16 +264,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* The generated player stays with the passage it belongs to. */}
-        {audioUrl && engine?.provider !== "browser" && (
-          <div className="mt-6">
-            <AudioPlayer
-              src={audioUrl}
-              autoPlaySignal={autoPlaySignal}
-              voiceName={voiceName}
-            />
-          </div>
-        )}
       </section>
 
       <aside className="flex flex-col gap-4 lg:sticky lg:top-8">
@@ -442,7 +272,7 @@ export default function Home() {
             voices={voices}
             value={voice}
             onChange={selectVoice}
-            disabled={!engine || loading}
+            disabled={voiceCount === 0}
           />
 
           <div
@@ -459,8 +289,7 @@ export default function Home() {
                   role="radio"
                   aria-checked={active}
                   onClick={() => setSpeed(option)}
-                  disabled={!engine}
-                  className={`flex h-[42px] items-center justify-center rounded-xl text-xs font-medium shadow-sm transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 ${
+                  className={`flex h-[42px] items-center justify-center rounded-xl text-xs font-medium shadow-sm transition active:scale-95 ${
                     active
                       ? "border border-stone-900 bg-stone-900 text-white"
                       : "border border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:text-stone-900"
@@ -472,41 +301,19 @@ export default function Home() {
             })}
           </div>
 
-          {/* Browser mode speaks through the transport card below instead. */}
-          {apiProvider && (
-            <button
-              type="button"
-              onClick={() => void generate()}
-              disabled={loading || !trimmed}
-              aria-busy={loading}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-stone-900 px-4 py-3.5 text-sm font-semibold text-white shadow-md transition hover:bg-stone-700 hover:shadow-lg active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-stone-900"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                  Generating…
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" aria-hidden />
-                  Generate Audio
-                </>
-              )}
-            </button>
-          )}
         </div>
 
-        {engine?.provider === "browser" && (
-          <BrowserSpeechPanel
-            ref={speechPanelRef}
-            text={text}
-            sentences={sentences}
-            voice={systemVoice}
-            rate={speed}
-            onNotify={showToast}
-            onReadAlong={setReadAlong}
-          />
-        )}
+        {/* The transport card carries its own Play button, so there is no
+            separate "generate" CTA in this mode. */}
+        <BrowserSpeechPanel
+          ref={speechPanelRef}
+          text={text}
+          sentences={sentences}
+          voice={systemVoice}
+          rate={speed}
+          onNotify={showToast}
+          onReadAlong={setReadAlong}
+        />
       </aside>
       </div>
 

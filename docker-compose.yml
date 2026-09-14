@@ -1,0 +1,43 @@
+# Single-service stack for the narrator app.
+#
+#   docker compose up -d --build     start (builds on first run)
+#   docker compose logs -f narrator  follow logs
+#   docker compose down              stop and remove
+#
+# The container is stateless and needs no environment variables: speech is
+# synthesised in the visitor's browser, so there is no server-side key or
+# database to configure.
+
+services:
+  narrator:
+    build:
+      context: .
+      args:
+        # Override when Docker Hub is unreachable or you build behind a
+        # mirror, e.g.
+        #   NODE_IMAGE=public.ecr.aws/docker/library/node:22-slim docker compose build
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-slim}
+    image: narrator:latest
+    container_name: narrator
+
+    # Host port on the left, container port on the right. The container always
+    # listens on 6001 (baked into the image), so change only the left side if
+    # something already holds 6001 — the Next dev server does, for instance:
+    #   NARRATOR_PORT=6007 docker compose up -d
+    ports:
+      - "${NARRATOR_PORT:-6001}:6001"
+
+    restart: unless-stopped
+
+    # Reports status only — Compose does not restart a container just because
+    # it turns unhealthy; `restart:` above covers crashes.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:6001/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

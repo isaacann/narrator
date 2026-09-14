@@ -1,0 +1,24 @@
+# Everything here is either rebuilt inside the image or must never ship.
+
+# Rebuilt by `npm ci` / `next build` in the image.
+node_modules
+.next
+out
+build
+*.tsbuildinfo
+next-env.d.ts
+
+# Never bake secrets, or local overrides, into a layer.
+.env
+.env.*
+!.env.example
+
+# Not needed to build, and .git can be large.
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+
+npm-debug.log*
+.DS_Store
